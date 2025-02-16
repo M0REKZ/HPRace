@@ -55,6 +55,10 @@ class CGameContext : public IGameServer
 	static void ConSetTeam(IConsole::IResult *pResult, void *pUserData);
 	static void ConSetTeamAll(IConsole::IResult *pResult, void *pUserData);
 	static void ConAddVote(IConsole::IResult *pResult, void *pUserData);
+	static void con_kill_pl(IConsole::IResult *result, void *user_data);
+	static void con_teleport(IConsole::IResult *result, void *user_data);
+	static void con_teleport_to(IConsole::IResult *result, void *user_data);
+	static void con_get_pos(IConsole::IResult *result, void *user_data);
 	static void ConRemoveVote(IConsole::IResult *pResult, void *pUserData);
 	static void ConForceVote(IConsole::IResult *pResult, void *pUserData);
 	static void ConClearVotes(IConsole::IResult *pResult, void *pUserData);
@@ -130,7 +134,7 @@ public:
 	};
 
 	// network
-	void SendChatTarget(int To, const char *pText);
+	void SendChatTarget(int To, const char *pText, int From=-1, int Team=0);
 	void SendChat(int ClientID, int Team, const char *pText);
 	void SendEmoticon(int ClientID, int Emoticon);
 	void SendWeaponPickup(int ClientID, int Weapon);

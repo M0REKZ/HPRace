@@ -1,8 +1,11 @@
 /* (c) Magnus Auvinen. See licence.txt in the root of the distribution for more information. */
 /* If you are missing that file, acquire a complete release at teeworlds.com.                */
+#include <string.h>
 #include <new>
 #include <engine/shared/config.h>
 #include <game/server/gamecontext.h>
+#include <game/server/gamemodes/race.h>
+#include <game/server/gamemodes/hprace.h>
 #include <game/mapitems.h>
 
 #include "character.h"
@@ -56,9 +59,20 @@ bool CCharacter::Spawn(CPlayer *pPlayer, vec2 Pos)
 {
 	m_EmoteStop = -1;
 	m_LastAction = -1;
-	m_ActiveWeapon = WEAPON_GUN;
+
+	if(!GameServer()->m_pController->IsRace())
+		m_ActiveWeapon = WEAPON_GUN;
+	else
+		m_ActiveWeapon = WEAPON_HAMMER;
+
 	m_LastWeapon = WEAPON_HAMMER;
 	m_QueuedWeapon = -1;
+
+	race_state = RACE_NONE;
+	time = 0.0f;
+	starttime = 0.0f;
+	refreshtime = 0.0f;
+	udeadbro = false;
 
 	m_pPlayer = pPlayer;
 	m_Pos = Pos;
@@ -196,6 +210,9 @@ void CCharacter::DoWeaponSwitch()
 	if(m_ReloadTimer != 0 || m_QueuedWeapon == -1 || m_aWeapons[WEAPON_NINJA].m_Got)
 		return;
 
+	if(GameServer()->m_pController->IsHPRace())
+		return;
+
 	// switch Weapon
 	SetWeapon(m_QueuedWeapon);
 }
@@ -282,34 +299,62 @@ void CCharacter::FireWeapon()
 		{
 			// reset objects Hit
 			m_NumObjectsHit = 0;
-			GameServer()->CreateSound(m_Pos, SOUND_HAMMER_FIRE);
+			if(m_pPlayer->GetPartner() && GameServer()->m_pController->IsHPRace())
+			{
+				GameServer()->CreateSound(m_Pos, SOUND_HAMMER_FIRE, CmaskOne(m_pPlayer->GetPartner()->GetCID()));
+				GameServer()->CreateSound(m_Pos, SOUND_HAMMER_FIRE, CmaskOne(m_pPlayer->GetCID()));
+			}
+			else if(!GameServer()->m_pController->IsHPRace())
+				GameServer()->CreateSound(m_Pos, SOUND_HAMMER_FIRE);
 
 			CCharacter *apEnts[MAX_CLIENTS];
 			int Hits = 0;
-			int Num = GameServer()->m_World.FindEntities(ProjStartPos, m_ProximityRadius*0.5f, (CEntity**)apEnts,
-														MAX_CLIENTS, CGameWorld::ENTTYPE_CHARACTER);
+			int Num = -1;
+			if(GameServer()->m_pController->IsHPRace())
+				Num = GameServer()->m_World.FindEntities(ProjStartPos, m_ProximityRadius, (CEntity**)apEnts, MAX_CLIENTS, CGameWorld::ENTTYPE_CHARACTER);
+			else if(!GameServer()->m_pController->IsRace())
+				Num = GameServer()->m_World.FindEntities(ProjStartPos, m_ProximityRadius*0.5f, (CEntity**)apEnts, MAX_CLIENTS, CGameWorld::ENTTYPE_CHARACTER);
 
 			for (int i = 0; i < Num; ++i)
 			{
 				CCharacter *pTarget = apEnts[i];
 
-				if ((pTarget == this) || GameServer()->Collision()->IntersectLine(ProjStartPos, pTarget->m_Pos, NULL, NULL))
+				if(pTarget == this)
+					continue;
+				if(!GameServer()->m_pController->IsHPRace() && GameServer()->Collision()->IntersectLine(ProjStartPos, pTarget->m_Pos, NULL, NULL))
+					continue;
+				if(GameServer()->m_pController->IsHPRace() && (!m_pPlayer->GetPartner() || pTarget->m_pPlayer->GetCID() != m_pPlayer->GetPartner()->GetCID()))
 					continue;
 
 				// set his velocity to fast upward (for now)
-				if(length(pTarget->m_Pos-ProjStartPos) > 0.0f)
-					GameServer()->CreateHammerHit(pTarget->m_Pos-normalize(pTarget->m_Pos-ProjStartPos)*m_ProximityRadius*0.5f);
-				else
-					GameServer()->CreateHammerHit(ProjStartPos);
+				if(!GameServer()->m_pController->IsHPRace())
+				{
+					if(length(pTarget->m_Pos-ProjStartPos) > 0.0f)
+						GameServer()->CreateHammerHit(pTarget->m_Pos-normalize(pTarget->m_Pos-ProjStartPos)*m_ProximityRadius*0.5f);
+					else
+						GameServer()->CreateHammerHit(ProjStartPos);
+				}
+				else if(m_pPlayer->GetPartner())
+				{
+					GameServer()->CreateSound(m_Pos, SOUND_HAMMER_HIT, CmaskOne(m_pPlayer->GetPartner()->GetCID()));
+					GameServer()->CreateSound(m_Pos, SOUND_HAMMER_HIT, CmaskOne(m_pPlayer->GetCID()));
+				}
 
 				vec2 Dir;
 				if (length(pTarget->m_Pos - m_Pos) > 0.0f)
-					Dir = normalize(pTarget->m_Pos - m_Pos);
+				{
+					if(!GameServer()->m_pController->IsHPRace())
+						Dir = normalize(pTarget->m_Pos - m_Pos);
+					else
+						Dir = normalize(vec2(m_LatestInput.m_TargetX, m_LatestInput.m_TargetY));
+				}
 				else
 					Dir = vec2(0.f, -1.f);
 
-				pTarget->TakeDamage(vec2(0.f, -1.f) + normalize(Dir + vec2(0.f, -1.1f)) * 10.0f, g_pData->m_Weapons.m_Hammer.m_pBase->m_Damage,
-					m_pPlayer->GetCID(), m_ActiveWeapon);
+				if(!GameServer()->m_pController->IsHPRace())
+					pTarget->TakeDamage(vec2(0.f, -1.0f) + normalize(Dir + vec2(0.0f, -1.1f)) * 10.0f, g_pData->m_Weapons.m_Hammer.m_pBase->m_Damage, m_pPlayer->GetCID(), m_ActiveWeapon);
+				else
+					pTarget->TakeDamage(vec2(0.f, -1.0f) + Dir * 10.0f*g_Config.m_SvHammerPower, g_pData->m_Weapons.m_Hammer.m_pBase->m_Damage, m_pPlayer->GetCID(), m_ActiveWeapon);
 				Hits++;
 			}
 
@@ -420,7 +465,7 @@ void CCharacter::FireWeapon()
 
 	m_AttackTick = Server()->Tick();
 
-	if(m_aWeapons[m_ActiveWeapon].m_Ammo > 0) // -1 == unlimited
+	if(m_aWeapons[m_ActiveWeapon].m_Ammo > 0 && (!GameServer()->m_pController->IsRace() || !g_Config.m_SvInfiniteAmmo)) // -1 == unlimited
 		m_aWeapons[m_ActiveWeapon].m_Ammo--;
 
 	if(!m_ReloadTimer)
@@ -538,6 +583,187 @@ void CCharacter::ResetInput()
 	m_LatestPrevInput = m_LatestInput = m_Input;
 }
 
+void CCharacter::HPRaceTick()
+{
+	m_Core.m_Vel.x = clamp((float)m_Core.m_Vel.x, (float)-500.0f, (float)500.0f); // fix the super fly bug
+	m_Core.m_Vel.y = clamp((float)m_Core.m_Vel.y, (float)-500.0f, (float)500.0f);
+
+	if(!m_pPlayer->GetPartner())
+		return;
+
+	// just prevent teleport hook bug
+	int z = GameServer()->Collision()->IsTeleport(m_Pos.x, m_Pos.y);
+	if(g_Config.m_SvTeleport && z)
+	{
+		for(int i = 0;i<MAX_CLIENTS;i++)
+		{
+			if(GameServer()->m_apPlayers[i] && i != m_pPlayer->GetCID() && GameServer()->m_apPlayers[i]->GetCharacter() 
+				&& GameServer()->m_apPlayers[i]->GetCharacter()->m_Core.m_HookedPlayer == m_pPlayer->GetCID())
+			{
+				GameServer()->GetPlayerChar(i)->m_Core.m_HookedPlayer = -1;
+				GameServer()->GetPlayerChar(i)->m_Core.m_HookState = HOOK_RETRACTED;
+				GameServer()->GetPlayerChar(i)->m_Core.m_TriggeredEvents |= COREEVENT_HOOK_RETRACT;
+				GameServer()->GetPlayerChar(i)->m_Core.m_HookState = HOOK_RETRACTED;
+				GameServer()->GetPlayerChar(i)->m_Core.m_HookPos = m_Core.m_Pos;
+			}
+		}
+		m_Core.m_HookedPlayer = -1;
+		m_Core.m_HookState = HOOK_RETRACTED;
+		m_Core.m_TriggeredEvents |= COREEVENT_HOOK_RETRACT;
+		m_Core.m_HookPos = m_Core.m_Pos;
+	}
+
+	CCharacterCore *p = 0;
+	if(m_pPlayer->GetPartnerChar())
+		p = &m_pPlayer->GetPartnerChar()->m_Core;
+
+	/*if(p)
+	{
+		float d = distance(m_Core.m_Pos+m_Core.m_Vel, p->m_Pos);
+		vec2 Dir = normalize(m_Core.m_Pos+m_Core.m_Vel - p->m_Pos);
+		if((d < ms_PhysSize*1.25f || distance(m_Core.m_Pos, p->m_Pos) < ms_PhysSize*1.25f) && d > 0.0f)
+		{
+			float a = (ms_PhysSize*1.45f - d);
+			float Velocity = 0.5f;
+
+			// make sure that we don't add excess force by checking the
+			// Direction against the current m_Velocity
+			vec2 VelDir = normalize(m_Core.m_Vel);
+			if (length(VelDir) > 0.0001)
+				Velocity = 1-(dot(VelDir, Dir)+1)/2;
+
+			m_Core.m_Vel += Dir*a*(Velocity*0.75f);
+			m_Core.m_Vel *= 0.85f;
+		}
+
+		// handle hook influence
+		if(m_Core.m_HookedPlayer == m_pPlayer->GetPartner()->GetCID())
+		{
+			if(d > ms_PhysSize) // TODO: fix tweakable variable
+			{
+				float accel = GameServer()->Tuning()->m_HookDragAccel * (d/GameServer()->Tuning()->m_HookLength);
+				float drag_speed = GameServer()->Tuning()->m_HookDragSpeed;
+
+				// add force to the hooked m_pPlayer
+				p->m_Vel.x = SaturatedAdd(-drag_speed, drag_speed, p->m_Vel.x, accel*Dir.x*1.5f);
+				p->m_Vel.y = SaturatedAdd(-drag_speed, drag_speed, p->m_Vel.y, accel*Dir.y*1.5f);
+
+				// add a little bit force to the guy who has the grip
+				m_Core.m_Vel.x = SaturatedAdd(-drag_speed, drag_speed, m_Core.m_Vel.x, -accel*Dir.x*0.25f);
+				m_Core.m_Vel.y = SaturatedAdd(-drag_speed, drag_speed, m_Core.m_Vel.y, -accel*Dir.y*0.25f);
+			}
+		}
+		else if(m_Core.m_HookedPlayer >= 0)
+		{
+			vec2 Dir = normalize(vec2(m_LatestInput.m_TargetX, m_LatestInput.m_TargetY));
+
+			float angle = GetAngle(Dir);
+
+			if(distance(m_Core.m_Pos,vec2(m_Core.m_HookPos.x+30.0f*cos(angle),m_Core.m_HookPos.y+30.0f*sin(angle))) <= GameServer()->Tuning()->m_HookLength)
+			{
+				m_Core.m_HookState = HOOK_FLYING;
+				if(GameServer()->GetPlayerChar(m_Core.m_HookedPlayer))
+					m_Core.m_HookPos += GameServer()->GetPlayerChar(m_Core.m_HookedPlayer)->m_Core.m_Vel+Dir*10.0f;
+				m_Core.m_HookPos.x += 30.0f*cos(angle);
+				m_Core.m_HookPos.y += 30.0f*sin(angle);
+			}
+			else
+			{
+				m_Core.m_HookState = HOOK_RETRACTED;
+				m_Core.m_TriggeredEvents |= COREEVENT_HOOK_RETRACT;
+				m_Core.m_HookState = HOOK_IDLE;
+			}
+			m_Core.m_HookedPlayer = -1;
+		}
+	}*/
+
+	// race
+	char buftime[128];
+	float f_time = (float)(Server()->Tick()-starttime)/((float)Server()->TickSpeed());
+	z = GameServer()->Collision()->IsCheckpoint(m_Pos.x, m_Pos.y);
+	CGameControllerHPRace *hp = (CGameControllerHPRace*)GameServer()->m_pController;
+
+	if(race_state == RACE_STARTED)
+	{
+		this->time = f_time;
+		hp->SetHPTeamScore(m_pPlayer->hprace_team, f_time);
+	}
+
+	if(race_state == RACE_STARTED && Server()->Tick()-refreshtime >= Server()->TickSpeed() && m_pPlayer->hprace_team>-1)
+	{
+		int int_time = (int)f_time;
+		str_format(buftime, sizeof(buftime), "Current time: %d min %d sec", int_time/60, int_time%60);
+		GameServer()->SendBroadcast(buftime, m_pPlayer->GetCID());
+		refreshtime = Server()->Tick();
+	}
+
+	if(GameServer()->Collision()->GetIndex(m_Pos.x, m_Pos.y) == TILE_BEGIN)
+	{
+		starttime = Server()->Tick();
+		refreshtime = Server()->Tick();
+		race_state = RACE_STARTED;
+	}
+	if(race_state == RACE_STARTED && m_pPlayer->GetPartnerChar() && m_pPlayer->GetPartnerChar()->race_state == RACE_STARTED 
+		&& m_pPlayer->GetPartnerChar()->time > this->time)
+	{
+		this->time = m_pPlayer->GetPartnerChar()->time;
+		refreshtime = m_pPlayer->GetPartnerChar()->refreshtime;
+		starttime = m_pPlayer->GetPartnerChar()->starttime;
+	}
+	else if(GameServer()->Collision()->GetIndex(m_Pos.x, m_Pos.y) == TILE_END && race_state == RACE_STARTED)
+	{
+		char buf[128];
+		str_format(buf, sizeof(buf), "%s & %s finished in: %d minute(s) %5.3f second(s)", Server()->ClientName(m_pPlayer->GetCID()),
+			Server()->ClientName(m_pPlayer->GetPartner()->GetCID()), (int)f_time/60, f_time-((int)f_time/60*60));
+		GameServer()->SendChat(-1, CGameContext::CHAT_ALL, buf);
+
+		HPRACE_TEAM_SCORE *PScore = ((CGameControllerHPRace*)GameServer()->m_pController)->score.search_team(Server()->ClientName(m_pPlayer->GetCID()), Server()->ClientName(m_pPlayer->GetPartner()->GetCID()), 0);
+		if(PScore && f_time - PScore->score < 0)
+		{
+			str_format(buf, sizeof(buf), "New record: %5.3f second(s) better", f_time - PScore->score);
+			GameServer()->SendChat(-1, CGameContext::CHAT_ALL, buf);
+		}
+
+		int ttime = 0-(int)f_time;
+		race_state = RACE_FINISHED;
+
+		if(m_pPlayer->m_Score < ttime)
+		{
+			m_pPlayer->m_Score = ttime;
+			m_pPlayer->GetPartner()->m_Score = ttime;
+		}
+
+		if(strncmp(Server()->ClientName(m_pPlayer->GetCID()), "nameless tee", 12) != 0 &&
+			strncmp(Server()->ClientName(m_pPlayer->GetPartner()->GetCID()), "nameless tee", 12) != 0)
+			((CGameControllerHPRace*)GameServer()->m_pController)->score.parseTeam(hp->GetHPTeam(m_pPlayer->hprace_team));
+
+		if(m_pPlayer->GetPartnerChar())
+		{
+			m_pPlayer->GetPartnerChar()->race_state = RACE_FINISHED;
+			m_pPlayer->GetPartner()->KillCharacter(-1);
+		}
+		udeadbro = true;
+	}
+
+	z = GameServer()->Collision()->IsTeleport(m_Pos.x, m_Pos.y);
+	if(g_Config.m_SvTeleport && z)
+	{
+		m_Core.m_HookedPlayer = -1;
+		m_Core.m_HookState = HOOK_RETRACTED;
+		m_Core.m_TriggeredEvents |= COREEVENT_HOOK_RETRACT;
+		m_Core.m_Pos = GameServer()->Collision()->Teleport(z);
+		m_Core.m_HookPos = m_Core.m_Pos;
+		if(g_Config.m_SvStrip)
+		{
+			m_ActiveWeapon = WEAPON_HAMMER;
+			m_LastWeapon = WEAPON_HAMMER;
+			m_aWeapons[0].m_Got = true;
+			for(int i = 1; i < 5; i++)
+				m_aWeapons[i].m_Got = false;
+		}
+	}
+}
+
 void CCharacter::Tick()
 {
 	if(m_pPlayer->m_ForceBalanced)
@@ -550,9 +776,142 @@ void CCharacter::Tick()
 	}
 
 	m_Core.m_Input = m_Input;
-	m_Core.Tick(true);
 
-	// handle death-tiles and leaving gamelayer
+	if(GameServer()->m_pController->IsHPRace())
+	{
+		if(m_pPlayer->GetPartner())
+			GameServer()->m_World.m_Core.m_Tuning.m_PlayerCollision = m_pPlayer->GetPartner()->GetCID()+2;
+		else
+			GameServer()->m_World.m_Core.m_Tuning.m_PlayerCollision = 1;
+	}
+	m_Core.Tick(true);
+	if(GameServer()->m_pController->IsHPRace())
+		GameServer()->m_World.m_Core.m_Tuning.m_PlayerCollision = 1;
+
+	int z = GameServer()->Collision()->IsCheckpoint(m_Pos.x, m_Pos.y);
+
+	if(GameServer()->m_pController->IsHPRace())
+	{
+		HPRaceTick();
+		if(udeadbro)
+		{
+			m_pPlayer->KillCharacter(-1);
+			return;
+		}
+	}
+	else
+	{
+		// race
+		char buftime[128];
+		float time = (float)(Server()->Tick()-starttime)/((float)Server()->TickSpeed());
+
+		if(z && race_state == RACE_STARTED)
+		{
+			cp_active = z;
+			cp_current[z] = time;
+			cp_tick = Server()->Tick() + Server()->TickSpeed()*2;
+		}
+		if(race_state == RACE_STARTED && Server()->Tick()-refreshtime >= Server()->TickSpeed())
+		{
+			int int_time = (int)time;
+			str_format(buftime, sizeof(buftime), "Current time: %d min %d sec", int_time/60, int_time%60);
+
+			if(cp_active && cp_tick > Server()->Tick())
+			{
+				PLAYER_SCORE *PScore = ((CGameControllerRace*)GameServer()->m_pController)->score.search_score(m_pPlayer->GetCID(), 0, 0);
+				if(PScore && PScore->cp_time[cp_active] != 0)
+				{
+					char tmp[128];
+					float diff = cp_current[cp_active] - PScore->cp_time[cp_active];
+					str_format(tmp, sizeof(tmp), "\nCheckpoint | Diff : %s%5.3f", (diff >= 0)?"+":"", diff);
+					strcat(buftime, tmp);
+				}
+			}
+
+			GameServer()->SendBroadcast(buftime, m_pPlayer->GetCID());
+			refreshtime = Server()->Tick();
+		}
+
+		if(g_Config.m_SvRegen > 0 && (Server()->Tick()%g_Config.m_SvRegen) == 0 && GameServer()->m_pController->IsRace())
+		{
+			if(m_Health < 10) 
+				m_Health++;
+			else if(m_Armor < 10)
+				m_Armor++;
+		}
+
+		if(GameServer()->Collision()->GetIndex(m_Pos.x, m_Pos.y) == TILE_BEGIN && GameServer()->m_pController->IsRace() && (!m_aWeapons[WEAPON_GRENADE].m_Got || race_state == RACE_NONE))
+		{
+			starttime = Server()->Tick();
+			refreshtime = Server()->Tick();
+			race_state = RACE_STARTED;
+		}
+		else if(GameServer()->Collision()->GetIndex(m_Pos.x, m_Pos.y) == TILE_END && race_state == RACE_STARTED)
+		{
+			char buf[128];
+			str_format(buf, sizeof(buf), "%s finished in: %d minute(s) %5.3f second(s)", Server()->ClientName(m_pPlayer->GetCID()), (int)time/60, time-((int)time/60*60));
+			GameServer()->SendChat(-1,CGameContext::CHAT_ALL, buf);
+			
+			PLAYER_SCORE *PScore = ((CGameControllerRace*)GameServer()->m_pController)->score.search_score(m_pPlayer->GetCID(), 0, 0);
+			if(PScore && time - PScore->score < 0)
+			{
+				str_format(buf, sizeof(buf), "New record: %5.3f second(s) better", time - PScore->score);
+				GameServer()->SendChat(-1, CGameContext::CHAT_ALL, buf);
+			}
+			
+			int ttime = 0-(int)time;
+			race_state = RACE_FINISHED;
+			
+			if(m_pPlayer->m_Score < ttime)
+				m_pPlayer->m_Score = ttime;
+			if(strncmp(Server()->ClientName(m_pPlayer->GetCID()), "nameless tee", 12) != 0)
+				((CGameControllerRace*)GameServer()->m_pController)->score.parsePlayer(m_pPlayer->GetCID(), (float)time, cp_current);
+		}
+		z = GameServer()->Collision()->IsTeleport(m_Pos.x, m_Pos.y);
+		if(g_Config.m_SvTeleport && z && GameServer()->m_pController->IsRace())
+		{
+			m_Core.m_HookedPlayer = -1;
+			m_Core.m_HookState = HOOK_RETRACTED;
+			m_Core.m_TriggeredEvents |= COREEVENT_HOOK_RETRACT;
+			m_Core.m_Pos = GameServer()->Collision()->Teleport(z);
+			m_Core.m_HookPos = m_Core.m_Pos;
+			if(g_Config.m_SvStrip)
+			{
+				m_ActiveWeapon = WEAPON_HAMMER;
+				m_LastWeapon = WEAPON_HAMMER;
+				m_aWeapons[0].m_Got = true;
+				for(int i = 1; i < 5; i++)
+					m_aWeapons[i].m_Got = false;
+			}
+		}
+	}
+
+	z = GameServer()->Collision()->IsCheckpoint(m_Pos.x, m_Pos.y);
+	if(GameServer()->Collision()->GetIndex(m_Core.m_Pos.x, m_Core.m_Pos.y) == TILE_BOOST && GameServer()->m_pController->IsRace())
+	{
+		if(m_Core.m_Vel.x >= 0)
+			m_Core.m_Vel.x = m_Core.m_Vel.x*(((float)g_Config.m_SvSpeedupMult)/10.0)+g_Config.m_SvSpeedupAdd;
+		else 
+			m_Core.m_Vel.x = m_Core.m_Vel.x*(((float)g_Config.m_SvSpeedupMult)/10.0)-g_Config.m_SvSpeedupAdd;
+	}
+	else if(GameServer()->Collision()->GetIndex(m_Core.m_Pos.x, m_Core.m_Pos.y) == TILE_BOOSTR && GameServer()->m_pController->IsRace())
+	{
+		if(m_Core.m_Vel.x >= 0)
+			m_Core.m_Vel.x = m_Core.m_Vel.x*(((float)g_Config.m_SvSpeedupMult)/10.0)+g_Config.m_SvSpeedupAdd;
+		else 
+			m_Core.m_Vel.x = g_Config.m_SvSpeedupAdd;
+	}
+	else if(GameServer()->Collision()->GetIndex(m_Core.m_Pos.x, m_Core.m_Pos.y) == TILE_BOOSTL && GameServer()->m_pController->IsRace())
+	{
+		if(m_Core.m_Vel.x <= 0)
+			m_Core.m_Vel.x = m_Core.m_Vel.x*(((float)g_Config.m_SvSpeedupMult)/10.0)-g_Config.m_SvSpeedupAdd;
+		else
+			m_Core.m_Vel.x = 0-g_Config.m_SvSpeedupAdd;
+	}
+	else if(GameServer()->Collision()->GetIndex(m_Core.m_Pos.x, m_Core.m_Pos.y) == TILE_JUMPER && GameServer()->m_pController->IsRace())
+		m_Core.m_Vel.y -= g_Config.m_SvJumperAdd;
+
+	// handle death-tiles and leaving GameServer()layer
 	if(GameServer()->Collision()->GetCollisionAt(m_Pos.x+m_ProximityRadius/3.f, m_Pos.y-m_ProximityRadius/3.f)&CCollision::COLFLAG_DEATH ||
 		GameServer()->Collision()->GetCollisionAt(m_Pos.x+m_ProximityRadius/3.f, m_Pos.y+m_ProximityRadius/3.f)&CCollision::COLFLAG_DEATH ||
 		GameServer()->Collision()->GetCollisionAt(m_Pos.x-m_ProximityRadius/3.f, m_Pos.y-m_ProximityRadius/3.f)&CCollision::COLFLAG_DEATH ||
@@ -581,12 +940,21 @@ void CCharacter::TickDefered()
 		m_ReckoningCore.Quantize();
 	}
 
-	//lastsentcore
+	//lastsentCore
 	vec2 StartPos = m_Core.m_Pos;
 	vec2 StartVel = m_Core.m_Vel;
 	bool StuckBefore = GameServer()->Collision()->TestBox(m_Core.m_Pos, vec2(28.0f, 28.0f));
 
+	if(GameServer()->m_pController->IsHPRace())
+	{
+		if(m_pPlayer->GetPartner())
+			GameServer()->m_World.m_Core.m_Tuning.m_PlayerCollision = m_pPlayer->GetPartner()->GetCID()+2;
+		else
+			GameServer()->m_World.m_Core.m_Tuning.m_PlayerCollision = 1;
+	}
 	m_Core.Move();
+	if(GameServer()->m_pController->IsHPRace())
+		GameServer()->m_World.m_Core.m_Tuning.m_PlayerCollision = 1;
 	bool StuckAfterMove = GameServer()->Collision()->TestBox(m_Core.m_Pos, vec2(28.0f, 28.0f));
 	m_Core.Quantize();
 	bool StuckAfterQuant = GameServer()->Collision()->TestBox(m_Core.m_Pos, vec2(28.0f, 28.0f));
@@ -618,14 +986,27 @@ void CCharacter::TickDefered()
 		GameServer()->Console()->Print(IConsole::OUTPUT_LEVEL_DEBUG, "game", aBuf);
 	}
 
-	int Events = m_Core.m_TriggeredEvents;
+	int EvapEnts = m_Core.m_TriggeredEvents;
 	int Mask = CmaskAllExceptOne(m_pPlayer->GetCID());
 
-	if(Events&COREEVENT_GROUND_JUMP) GameServer()->CreateSound(m_Pos, SOUND_PLAYER_JUMP, Mask);
-
-	if(Events&COREEVENT_HOOK_ATTACH_PLAYER) GameServer()->CreateSound(m_Pos, SOUND_HOOK_ATTACH_PLAYER, CmaskAll());
-	if(Events&COREEVENT_HOOK_ATTACH_GROUND) GameServer()->CreateSound(m_Pos, SOUND_HOOK_ATTACH_GROUND, Mask);
-	if(Events&COREEVENT_HOOK_HIT_NOHOOK) GameServer()->CreateSound(m_Pos, SOUND_HOOK_NOATTACH, Mask);
+	if(!GameServer()->m_pController->IsHPRace())
+	{
+		if(EvapEnts&COREEVENT_GROUND_JUMP) GameServer()->CreateSound(m_Pos, SOUND_PLAYER_JUMP, Mask);
+		if(EvapEnts&COREEVENT_HOOK_ATTACH_PLAYER) GameServer()->CreateSound(m_Pos, SOUND_HOOK_ATTACH_PLAYER, CmaskAll());
+		if(EvapEnts&COREEVENT_HOOK_ATTACH_GROUND) GameServer()->CreateSound(m_Pos, SOUND_HOOK_ATTACH_GROUND, Mask);
+		if(EvapEnts&COREEVENT_HOOK_HIT_NOHOOK) GameServer()->CreateSound(m_Pos, SOUND_HOOK_NOATTACH, Mask);
+	}
+	else if(m_pPlayer->GetPartnerChar()) // allow hear just partner's sound
+	{
+		int pid = m_pPlayer->GetPartner()->GetCID();
+		if(EvapEnts&COREEVENT_GROUND_JUMP) GameServer()->CreateSound(m_Pos, SOUND_PLAYER_JUMP, CmaskOne(pid));
+		if(EvapEnts&COREEVENT_HOOK_ATTACH_PLAYER && m_Core.m_HookedPlayer == pid) 
+			GameServer()->CreateSound(m_Pos, SOUND_HOOK_ATTACH_PLAYER, CmaskOne(pid));
+		if(EvapEnts&COREEVENT_HOOK_ATTACH_GROUND) GameServer()->CreateSound(m_Pos, SOUND_HOOK_ATTACH_GROUND, CmaskOne(pid));
+		if(EvapEnts&COREEVENT_HOOK_HIT_NOHOOK) GameServer()->CreateSound(m_Pos, SOUND_HOOK_NOATTACH, CmaskOne(pid));
+		if(EvapEnts&COREEVENT_HOOK_ATTACH_PLAYER && m_Core.m_HookedPlayer == pid)
+			GameServer()->CreateSound(m_Pos, SOUND_HOOK_ATTACH_PLAYER, CmaskOne(m_pPlayer->GetCID()));
+	}
 
 
 	if(m_pPlayer->GetTeam() == TEAM_SPECTATORS)
@@ -640,8 +1021,12 @@ void CCharacter::TickDefered()
 		CNetObj_Character Current;
 		mem_zero(&Predicted, sizeof(Predicted));
 		mem_zero(&Current, sizeof(Current));
-		m_ReckoningCore.Write(&Predicted);
+		//reckoningm_Core.write(&predicted);
 		m_Core.Write(&Current);
+		m_ReckoningCore = m_Core;
+		m_ReckoningCore.m_Vel += m_Core.m_Vel;
+		m_ReckoningCore.m_Vel.y += GameServer()->Tuning()->m_Gravity;
+		m_ReckoningCore.Write(&Predicted);
 
 		// only allow dead reackoning for a top of 3 seconds
 		if(m_ReckoningTick+Server()->TickSpeed()*3 < Server()->Tick() || mem_comp(&Predicted, &Current, sizeof(CNetObj_Character)) != 0)
@@ -707,10 +1092,15 @@ bool CCharacter::TakeDamage(vec2 Force, int Dmg, int From, int Weapon)
 
 	if(GameServer()->m_pController->IsFriendlyFire(m_pPlayer->GetCID(), From) && !g_Config.m_SvTeamdamage)
 		return false;
+	if(GameServer()->m_pController->IsHPRace())
+		return false;
 
 	// m_pPlayer only inflicts half damage on self
 	if(From == m_pPlayer->GetCID())
 		Dmg = max(1, Dmg/2);
+ 
+	if(((From == m_pPlayer->GetCID() && !g_Config.m_SvRocketJumpDamage) || From != m_pPlayer->GetCID()) && GameServer()->m_pController->IsRace())
+		Dmg = 0;
 
 	m_DamageTaken++;
 
@@ -798,6 +1188,10 @@ bool CCharacter::TakeDamage(vec2 Force, int Dmg, int From, int Weapon)
 void CCharacter::Snap(int SnappingClient)
 {
 	if(NetworkClipped(SnappingClient))
+		return;
+ 	
+	if(GameServer()->m_apPlayers[SnappingClient] && GameServer()->m_apPlayers[SnappingClient]->GetPartner()
+		&& SnappingClient != m_pPlayer->GetCID() && m_pPlayer->GetCID() != GameServer()->m_apPlayers[SnappingClient]->GetPartner()->GetCID())
 		return;
 
 	CNetObj_Character *pCharacter = static_cast<CNetObj_Character *>(Server()->SnapNewItem(NETOBJTYPE_CHARACTER, m_pPlayer->GetCID(), sizeof(CNetObj_Character)));

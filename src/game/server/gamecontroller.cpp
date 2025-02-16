@@ -50,8 +50,11 @@ float IGameController::EvaluateSpawnPos(CSpawnEval *pEval, vec2 Pos)
 		if(pEval->m_FriendlyTeam != -1 && pC->GetPlayer()->GetTeam() == pEval->m_FriendlyTeam)
 			Scoremod = 0.5f;
 
-		float d = distance(Pos, pC->m_Pos);
-		Score += Scoremod * (d == 0 ? 1000000000.0f : 1.0f/d);
+		if(!IsRace())
+		{
+			float d = distance(Pos, pC->m_Pos);
+			Score += Scoremod * (d == 0 ? 1000000000.0f : 1.0f/d);
+		}
 	}
 
 	return Score;
@@ -173,7 +176,7 @@ bool IGameController::OnEntity(int Index, vec2 Pos)
 
 void IGameController::EndRound()
 {
-	if(m_Warmup) // game can't end when we are running warmup
+	if(m_Warmup) // game can't end when we are running m_Warmup
 		return;
 
 	GameServer()->m_World.m_Paused = true;
@@ -407,7 +410,7 @@ bool IGameController::CanBeMovedOnBalance(int ClientID)
 
 void IGameController::Tick()
 {
-	// do warmup
+	// do m_Warmup
 	if(m_Warmup)
 	{
 		m_Warmup--;
@@ -709,6 +712,15 @@ void IGameController::DoWincheck()
 	}
 }
 
+void IGameController::DoRaceTimeCheck()
+{
+	if(m_GameOverTick == -1 && !m_Warmup)
+	{
+		if((g_Config.m_SvTimelimit > 0 && (Server()->Tick()-m_RoundStartTick) >= g_Config.m_SvTimelimit*Server()->TickSpeed()*60))
+			EndRound();
+	}
+}
+
 int IGameController::ClampTeam(int Team)
 {
 	if(Team < 0)
@@ -716,4 +728,14 @@ int IGameController::ClampTeam(int Team)
 	if(IsTeamplay())
 		return Team&1;
 	return 0;
+}
+
+bool IGameController::IsRace() const
+{
+	return false;
+}
+
+bool IGameController::IsHPRace() const
+{
+	return false;
 }

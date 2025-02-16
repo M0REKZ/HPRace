@@ -1,5 +1,6 @@
 /* (c) Magnus Auvinen. See licence.txt in the root of the distribution for more information. */
 /* If you are missing that file, acquire a complete release at teeworlds.com.                */
+#include <engine/shared/config.h>
 #include <game/generated/protocol.h>
 #include <game/server/gamecontext.h>
 #include "projectile.h"
@@ -67,7 +68,7 @@ void CProjectile::Tick()
 
 	m_LifeSpan--;
 
-	if(TargetChr || Collide || m_LifeSpan < 0 || GameLayerClipped(CurPos))
+	if((TargetChr && !GameServer()->m_pController->IsRace()) || Collide || m_LifeSpan < 0 || GameLayerClipped(CurPos))
 	{
 		if(m_LifeSpan >= 0 || m_Weapon == WEAPON_GRENADE)
 			GameServer()->CreateSound(CurPos, m_SoundImpact);
@@ -75,10 +76,16 @@ void CProjectile::Tick()
 		if(m_Explosive)
 			GameServer()->CreateExplosion(CurPos, m_Owner, m_Weapon, false);
 
-		else if(TargetChr)
+		else if(TargetChr && !GameServer()->m_pController->IsRace())
 			TargetChr->TakeDamage(m_Direction * max(0.001f, m_Force), m_Damage, m_Owner, m_Weapon);
 
 		GameServer()->m_World.DestroyEntity(this);
+	}
+	int z = GameServer()->Collision()->IsTeleport((int)CurPos.x,CurPos.y);
+	if(g_Config.m_SvTeleport && z && g_Config.m_SvTeleportGrenade && m_Weapon == WEAPON_GRENADE && GameServer()->m_pController->IsRace())
+	{
+		m_Pos = GameServer()->Collision()->Teleport(z);
+		m_StartTick = Server()->Tick();
 	}
 }
 

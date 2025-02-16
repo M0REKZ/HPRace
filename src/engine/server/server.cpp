@@ -1061,6 +1061,15 @@ int CServer::BanRemove(NETADDR Addr)
 	return m_NetServer.BanRemove(Addr);
 }
 
+void CServer::GetIP(int ClientID, char *pBuffer, int BufferSize)
+{
+	if(ClientID < 0 || ClientID >= MAX_CLIENTS || m_aClients[ClientID].m_State < CClient::STATE_READY)
+		return;
+	NETADDR Addr = m_NetServer.ClientAddr(ClientID);
+	Addr.port = 0;
+	net_addr_str(&Addr, pBuffer, BufferSize);
+}
+
 
 void CServer::PumpNetwork()
 {

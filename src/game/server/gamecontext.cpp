@@ -13,6 +13,8 @@
 #include "gamemodes/tdm.h"
 #include "gamemodes/ctf.h"
 #include "gamemodes/mod.h"
+#include "gamemodes/race.h"
+#include "gamemodes/hprace.h"
 
 enum
 {
@@ -208,11 +210,11 @@ void CGameContext::CreateSoundGlobal(int Sound, int Target)
 }
 
 
-void CGameContext::SendChatTarget(int To, const char *pText)
+void CGameContext::SendChatTarget(int To, const char *pText, int From, int Team)
 {
 	CNetMsg_Sv_Chat Msg;
-	Msg.m_Team = 0;
-	Msg.m_ClientID = -1;
+	Msg.m_Team = Team;
+	Msg.m_ClientID = From;
 	Msg.m_pMessage = pText;
 	Server()->SendPackMsg(&Msg, MSGFLAG_VITAL, To);
 }
@@ -428,7 +430,7 @@ void CGameContext::OnTick()
 					int ActVote = m_apPlayers[i]->m_Vote;
 					int ActVotePos = m_apPlayers[i]->m_VotePos;
 
-					// check for more players with the same ip (only use the vote of the one who voted first)
+					// check for more m_apPlayers with the same ip (only use the vote of the one who voted first)
 					for(int j = i+1; j < MAX_CLIENTS; ++j)
 					{
 						if(!m_apPlayers[j] || aVoteChecked[j] || str_comp(aaBuf[j], aaBuf[i]))
@@ -506,8 +508,18 @@ void CGameContext::OnClientPredictedInput(int ClientID, void *pInput)
 
 void CGameContext::OnClientEnter(int ClientID)
 {
-	//world.insert_entity(&players[client_id]);
+	//world.insert_entity(&m_apPlayers[ClientID]);
 	m_apPlayers[ClientID]->Respawn();
+
+	//race
+	if(m_pController->IsRace())
+		m_apPlayers[ClientID]->m_Score = -9999;
+	else
+		m_apPlayers[ClientID]->m_Score = 0;
+
+	if(m_pController->IsRace())
+		((CGameControllerRace*)m_pController)->score.initPlayer(ClientID);
+
 	char aBuf[512];
 	str_format(aBuf, sizeof(aBuf), "'%s' entered and joined the %s", Server()->ClientName(ClientID), m_pController->GetTeamName(m_apPlayers[ClientID]->GetTeam()));
 	SendChat(-1, CGameContext::CHAT_ALL, aBuf);
@@ -516,6 +528,13 @@ void CGameContext::OnClientEnter(int ClientID)
 	Console()->Print(IConsole::OUTPUT_LEVEL_DEBUG, "game", aBuf);
 
 	m_VoteUpdate = true;
+
+	if(m_pController->IsHPRace())
+	{
+		SendChatTarget(ClientID, "HpRace mod 2.0 by LordSkelethom.");
+		SendChatTarget(ClientID, "type /help to learn how to join.");
+		SendBroadcast("type /help to learn how to join.", ClientID);
+	}
 }
 
 void CGameContext::OnClientConnected(int ClientID)
@@ -524,8 +543,8 @@ void CGameContext::OnClientConnected(int ClientID)
 	const int StartTeam = g_Config.m_SvTournamentMode ? TEAM_SPECTATORS : m_pController->GetAutoTeam(ClientID);
 
 	m_apPlayers[ClientID] = new(ClientID) CPlayer(this, ClientID, StartTeam);
-	//players[client_id].init(client_id);
-	//players[client_id].client_id = client_id;
+	//m_apPlayers[ClientID].init(ClientID);
+	//m_apPlayers[ClientID].ClientID = ClientID;
 
 	(void)m_pController->CheckTeamBalance();
 
@@ -569,6 +588,7 @@ void CGameContext::OnMessage(int MsgID, CUnpacker *pUnpacker, int ClientID)
 {
 	void *pRawMsg = m_NetObjHandler.SecureUnpackMsg(MsgID, pUnpacker);
 	CPlayer *pPlayer = m_apPlayers[ClientID];
+	CPlayer *p = pPlayer;
 
 	if(!pRawMsg)
 	{
@@ -587,11 +607,6 @@ void CGameContext::OnMessage(int MsgID, CUnpacker *pUnpacker, int ClientID)
 		else
 			Team = CGameContext::CHAT_ALL;
 
-		if(g_Config.m_SvSpamprotection && pPlayer->m_LastChat && pPlayer->m_LastChat+Server()->TickSpeed() > Server()->Tick())
-			return;
-
-		pPlayer->m_LastChat = Server()->Tick();
-
 		// check for invalid chars
 		unsigned char *pMessage = (unsigned char *)pMsg->m_pMessage;
 		while (*pMessage)
@@ -601,7 +616,223 @@ void CGameContext::OnMessage(int MsgID, CUnpacker *pUnpacker, int ClientID)
 			pMessage++;
 		}
 
-		SendChat(ClientID, Team, pMsg->m_pMessage);
+		if(g_Config.m_SvSpamprotection && pPlayer->m_LastChat && pPlayer->m_LastChat+Server()->TickSpeed() > Server()->Tick())
+		{
+			if(!str_comp(pMsg->m_pMessage, "/rank") && m_pController->IsRace())
+				m_apPlayers[ClientID]->m_LastChat = Server()->Tick() + Server()->TickSpeed()*10;
+			else 
+				m_apPlayers[ClientID]->m_LastChat = Server()->Tick();
+		}
+		else
+		{
+			m_apPlayers[ClientID]->m_LastChat = Server()->Tick();
+
+			if(!str_comp(pMsg->m_pMessage, "/info"))
+			{
+				char buf[256];
+				str_format(buf, sizeof(buf), "HpRace mod by LordSkelethom (say /mods). (C)Rajh & LordSkelethom (2.0)", Server()->ClientName(ClientID));
+				SendChatTarget(ClientID, buf);
+			}
+			else if(!str_comp(pMsg->m_pMessage, "/mods"))
+			{
+				char buf[128];
+				str_format(buf, sizeof(buf), "Mod used: Race mod (%s)", Server()->ClientName(ClientID));
+				SendChatTarget(ClientID, buf);
+			}
+			else if(!str_comp_num(pMsg->m_pMessage, "/top5", 5) && m_pController->IsRace())
+			{
+				const char *pt = pMsg->m_pMessage;
+				int number = 0;
+				pt += 6;
+				while(*pt && *pt >= '0' && *pt <= '9')
+				{
+					number = number*10+(*pt-'0');
+					pt++;
+				}
+				if(!m_pController->IsHPRace())
+				{
+					if(number)
+						((CGameControllerRace*)m_pController)->score.top5_draw(ClientID, number);
+					else
+						((CGameControllerRace*)m_pController)->score.top5_draw(ClientID, 0);
+				}
+				else
+				{
+					if(number)
+						((CGameControllerHPRace*)m_pController)->score.top5_draw(ClientID, number);
+					else
+						((CGameControllerHPRace*)m_pController)->score.top5_draw(ClientID, 0);
+				}
+			}
+			else if(!str_comp_num(pMsg->m_pMessage, "/rank", 5) && m_pController->IsRace())
+			{
+				char buf[512];
+				const char *name = pMsg->m_pMessage;
+				name += 6;
+				int pos;
+				
+				if(!m_pController->IsHPRace())
+				{
+					PLAYER_SCORE *pscore;
+					if(!str_comp(pMsg->m_pMessage, "/rank"))
+						pscore = ((CGameControllerRace*)m_pController)->score.search_score(ClientID, 1, &pos);
+					else
+						pscore = ((CGameControllerRace*)m_pController)->score.search_name(name, &pos, true);
+					
+					if(pscore && pos > -1)
+					{
+						float time = pscore->score;
+						str_format(buf, sizeof(buf), "%d. %s Time: %d minute(s) %5.3f second(s)", pos, pscore->name, (int)time/60, time-((int)time/60*60));
+						if(str_comp(pMsg->m_pMessage, "/rank"))
+						{
+							char client_name[128];
+							str_format(client_name, sizeof(client_name), " (%s)", Server()->ClientName(ClientID));
+							char rofl[256];
+							str_format(rofl, sizeof(rofl), "%s%s", buf, client_name);
+							str_copy(buf, rofl, sizeof(buf));
+						}
+						SendChat(-1, CGameContext::CHAT_ALL, buf);
+						m_apPlayers[ClientID]->m_LastChat = Server()->Tick() + Server()->TickSpeed()*3;
+						return;
+					}
+					else if(pos == -1)
+						str_format(buf, sizeof(buf), "Several m_apPlayers were found.");
+					else
+						str_format(buf, sizeof(buf), "%s is not ranked", str_comp(pMsg->m_pMessage, "/rank")?name:Server()->ClientName(ClientID));
+				}
+				else
+				{
+					HPRACE_TEAM_SCORE *pscore;
+					if(!str_comp(pMsg->m_pMessage, "/rank"))
+						pscore = ((CGameControllerHPRace*)m_pController)->score.search_score(ClientID, 1, &pos);
+					else
+						pscore = ((CGameControllerHPRace*)m_pController)->score.search_name(name, &pos, true);
+					
+					if(pscore)
+					{
+						float time = pscore->score;
+						str_format(buf, sizeof(buf), "%d. %s & %s - Time: %d minute(s) %5.3f second(s)", pos, pscore->name, pscore->name2
+							, (int) time/60, time-((int)time/60*60));
+						SendChat(-1, CGameContext::CHAT_ALL, buf);
+						if(str_comp(pMsg->m_pMessage, "/rank"))
+							SendChatTarget(ClientID, "If it is not the right player, be more precise.");
+						m_apPlayers[ClientID]->m_LastChat = Server()->Tick() + Server()->TickSpeed()*3;
+						return;
+					}
+					else
+						str_format(buf, sizeof(buf), "%s is not ranked", str_comp(pMsg->m_pMessage, "/rank")?name:Server()->ClientName(ClientID));
+				}
+				
+				SendChatTarget(ClientID, buf);
+			}
+			else if(!str_comp(pMsg->m_pMessage, "/cmdlist"))
+			{
+				SendChatTarget(ClientID, "---Command List---");
+				SendChatTarget(ClientID, "\"/info\" information about the mod");
+				SendChatTarget(ClientID, "\"/mods\" shows the used mods");
+				SendChatTarget(ClientID, "\"/rank\" shows your rank");
+				SendChatTarget(ClientID, "\"/rank NAME\" shows the rank of a specific player");
+				SendChatTarget(ClientID, "\"/top5 X\" shows the top 5");
+			}
+			else if(!str_comp(pMsg->m_pMessage, "/help"))
+			{
+				SendChatTarget(ClientID, "--- How to get a partner ---");
+				SendChatTarget(ClientID, "- type /with partofnameyouwant");
+				SendChatTarget(ClientID, "- example :");
+				SendChatTarget(ClientID, "- /with lord will send a msg to a player with 'lord' in his name.");
+				SendChatTarget(ClientID, "----------------------------");
+			}
+			else if(!str_comp(pMsg->m_pMessage, "/without")  && m_pController->IsHPRace())
+			{
+				p->DeletePartner();
+				p->KillCharacter(-1);
+			}
+			else if(!str_comp_num(pMsg->m_pMessage, "/with", 5) && m_pController->IsHPRace())
+			{
+				char buf[512];
+				const char *name = pMsg->m_pMessage;
+				name += 6;
+				int num = 0;
+				int id = -1;
+				
+				for(int i=0;i<MAX_CLIENTS;i++)
+				{
+					if(m_apPlayers[i] && !m_apPlayers[i]->GetPartner() && i!=ClientID && str_find_nocase(Server()->ClientName(i),name))
+					{
+						id = i;
+						num++;
+					}
+				}
+				if(p->GetPartner())
+					str_format(buf, sizeof(buf), "You have already a partner (%s).",Server()->ClientName(p->GetPartner()->GetCID()));
+				else if(num>1)
+					str_format(buf, sizeof(buf), "Several m_apPlayers were found, be more precise.");
+				else if(num==0)
+					str_format(buf, sizeof(buf), "No player matches.");
+				else if(!m_apPlayers[id]->GetPartner())
+				{
+					m_apPlayers[id]->asked = ClientID;
+					char buf2[512];
+					str_format(buf2, sizeof(buf2), "Do you want to be %s's partner ?",Server()->ClientName(ClientID));
+					SendChatTarget(id,buf2);
+					SendChatTarget(id, "Say /yes or /no.");
+					str_format(buf, sizeof(buf), "%s have been asked.",Server()->ClientName(id));
+				}
+				else
+					str_format(buf, sizeof(buf), "You can't choose this player.");
+				SendChatTarget(ClientID, buf);
+				return;
+			}
+			else if(!str_comp(pMsg->m_pMessage, "/yes")  && m_pController->IsHPRace())
+			{
+				if(p->asked<0 || !m_apPlayers[p->asked])
+					return;
+
+				else if(p->GetPartner())
+				{
+					char buf[256];
+					str_format(buf, sizeof(buf), "%s chose another partner.",Server()->ClientName(p->asked));
+					SendChatTarget(ClientID, buf);
+				}
+				else
+				{
+					p->SetPartner(p->asked);
+					m_apPlayers[p->asked]->SetPartner(ClientID);
+					((CGameControllerHPRace*)m_pController)->CreateHPTeam(ClientID, p->asked);
+				}
+			}
+			else if(!str_comp(pMsg->m_pMessage, "/no")  && m_pController->IsHPRace())
+			{
+				if(p->asked<0 || !m_apPlayers[p->asked])
+					return;
+				char buf[256];
+				str_format(buf, sizeof(buf), "%s refused to be your partner.",Server()->ClientName(ClientID));
+				SendChatTarget(p->asked, buf);
+				str_format(buf, sizeof(buf), "You refused to be %s's partner.",Server()->ClientName(p->asked));
+				SendChatTarget(ClientID, buf);
+				p->asked = -1;
+			}
+			else if(!str_comp_num(pMsg->m_pMessage, "/", 1))
+			{
+				SendChatTarget(ClientID, "Wrong command.");
+				SendChatTarget(ClientID, "Say \"/cmdlist\" for list of command available.");
+			}
+			else if(p->GetPartner() && Team!=CGameContext::CHAT_ALL && p->GetTeam() > -1)
+			{
+				SendChatTarget(p->GetPartner()->GetCID(), pMsg->m_pMessage, ClientID, 1);
+				SendChatTarget(ClientID, pMsg->m_pMessage, ClientID, 1);
+			}
+			else if(!p->GetPartner() && Team!=CGameContext::CHAT_ALL && p->GetTeam()>-1)
+			{
+				for(int i=0;i<MAX_CLIENTS;i++)
+				{
+					if(m_apPlayers[i] && m_apPlayers[i]->hprace_team<0)
+						SendChatTarget(i, pMsg->m_pMessage, ClientID, 1);
+				}
+			}
+			else
+				SendChat(ClientID, Team, pMsg->m_pMessage);
+		}
 	}
 	else if(MsgID == NETMSGTYPE_CL_CALLVOTE)
 	{
@@ -665,7 +896,7 @@ void CGameContext::OnMessage(int MsgID, CUnpacker *pUnpacker, int ClientID)
 		{
 			if(!g_Config.m_SvVoteKick)
 			{
-				SendChatTarget(ClientID, "Server does not allow voting to kick players");
+				SendChatTarget(ClientID, "Server does not allow voting to kick m_apPlayers");
 				return;
 			}
 
@@ -678,7 +909,7 @@ void CGameContext::OnMessage(int MsgID, CUnpacker *pUnpacker, int ClientID)
 
 				if(PlayerNum < g_Config.m_SvVoteKickMin)
 				{
-					str_format(aChatmsg, sizeof(aChatmsg), "Kick voting requires %d players on the server", g_Config.m_SvVoteKickMin);
+					str_format(aChatmsg, sizeof(aChatmsg), "Kick voting requires %d m_apPlayers on the server", g_Config.m_SvVoteKickMin);
 					SendChatTarget(ClientID, aChatmsg);
 					return;
 				}
@@ -720,7 +951,7 @@ void CGameContext::OnMessage(int MsgID, CUnpacker *pUnpacker, int ClientID)
 		{
 			if(!g_Config.m_SvVoteSpectate)
 			{
-				SendChatTarget(ClientID, "Server does not allow voting to move players to spectators");
+				SendChatTarget(ClientID, "Server does not allow voting to move m_apPlayers to spectators");
 				return;
 			}
 
@@ -802,7 +1033,7 @@ void CGameContext::OnMessage(int MsgID, CUnpacker *pUnpacker, int ClientID)
 		else
 		{
 			char aBuf[128];
-			str_format(aBuf, sizeof(aBuf), "Only %d active players are allowed", g_Config.m_SvMaxClients-g_Config.m_SvSpectatorSlots);
+			str_format(aBuf, sizeof(aBuf), "Only %d active m_apPlayers are allowed", g_Config.m_SvMaxClients-g_Config.m_SvSpectatorSlots);
 			SendBroadcast(aBuf, ClientID);
 		}
 	}
@@ -960,8 +1191,17 @@ void CGameContext::OnMessage(int MsgID, CUnpacker *pUnpacker, int ClientID)
 		if(pPlayer->m_LastKill && pPlayer->m_LastKill+Server()->TickSpeed()*3 > Server()->Tick())
 			return;
 
+		if(p->GetPartnerChar())
+		{
+			p->GetPartner()->m_LastKill = Server()->Tick();
+			p->GetPartner()->KillCharacter(WEAPON_SELF);
+			p->GetPartner()->m_RespawnTick = Server()->Tick();
+		}
+ 		
 		pPlayer->m_LastKill = Server()->Tick();
 		pPlayer->KillCharacter(WEAPON_SELF);
+		if(m_pController->IsRace())
+			p->m_RespawnTick = Server()->Tick();
 	}
 }
 
@@ -1066,6 +1306,65 @@ void CGameContext::ConSetTeamAll(IConsole::IResult *pResult, void *pUserData)
 			pSelf->m_apPlayers[i]->SetTeam(Team);
 
 	(void)pSelf->m_pController->CheckTeamBalance();
+}
+
+void CGameContext::con_kill_pl(IConsole::IResult *result, void *user_data)
+{
+	CGameContext *pSelf = (CGameContext *)user_data;
+	int cid = clamp(result->GetInteger(0), 0, (int)MAX_CLIENTS-1);
+	if(!pSelf->m_apPlayers[cid] || !pSelf->m_pController->IsRace())
+		return;
+	
+	pSelf->m_apPlayers[cid]->KillCharacter(WEAPON_GAME);
+	char buf[512];
+	str_format(buf, sizeof(buf), "%s Killed by admin", pSelf->Server()->ClientName(cid));
+	pSelf->SendChat(-1, CGameContext::CHAT_ALL, buf);
+}
+
+void CGameContext::con_teleport(IConsole::IResult *result, void *user_data)
+{
+	CGameContext *pSelf = (CGameContext *)user_data;
+	int cid1 = clamp(result->GetInteger(0), 0, (int)MAX_CLIENTS-1);
+	int cid2 = clamp(result->GetInteger(1), 0, (int)MAX_CLIENTS-1);
+	if(pSelf->m_apPlayers[cid1] && pSelf->m_apPlayers[cid2] && pSelf->m_pController->IsRace())
+	{
+		CCharacter* chr = pSelf->m_apPlayers[cid1]->GetCharacter();
+		CCharacter* par = pSelf->m_apPlayers[cid1]->GetPartnerChar();
+		if(chr)
+		{
+			chr->m_Core.m_Pos = pSelf->m_apPlayers[cid2]->m_ViewPos;
+			chr->race_state = RACE_FINISHED;
+		}
+		if(par)
+			par->race_state = RACE_FINISHED;
+	}
+}
+
+void CGameContext::con_teleport_to(IConsole::IResult *result, void *user_data)
+{
+	CGameContext *pSelf = (CGameContext *)user_data;
+	int cid = clamp(result->GetInteger(0), 0, (int)MAX_CLIENTS-1);
+	if(pSelf->m_apPlayers[cid] && pSelf->m_pController->IsRace())
+	{
+		CCharacter* chr = pSelf->m_apPlayers[cid]->GetCharacter();
+		CCharacter* par = pSelf->m_apPlayers[cid]->GetPartnerChar();
+		if(chr)
+		{
+			chr->m_Core.m_Pos.x = result->GetInteger(1);
+			chr->m_Core.m_Pos.y = result->GetInteger(2);
+			chr->race_state = RACE_FINISHED;
+		}
+		if(par)
+			par->race_state = RACE_FINISHED;
+	}
+}
+
+void CGameContext::con_get_pos(IConsole::IResult *result, void *user_data)
+{
+	CGameContext *pSelf = (CGameContext *)user_data;
+	int cid = clamp(result->GetInteger(0), 0, (int)MAX_CLIENTS-1);
+	if(pSelf->m_apPlayers[cid])
+		dbg_msg("Tele", "%s pos: %d @ %d", pSelf->Server()->ClientName(cid), (int)pSelf->m_apPlayers[cid]->m_ViewPos.x, (int)pSelf->m_apPlayers[cid]->m_ViewPos.y);
 }
 
 void CGameContext::ConAddVote(IConsole::IResult *pResult, void *pUserData)
@@ -1326,13 +1625,18 @@ void CGameContext::OnConsoleInit()
 	Console()->Register("broadcast", "r", CFGFLAG_SERVER, ConBroadcast, this, "Broadcast message");
 	Console()->Register("say", "r", CFGFLAG_SERVER, ConSay, this, "Say in chat");
 	Console()->Register("set_team", "ii?i", CFGFLAG_SERVER, ConSetTeam, this, "Set team of player to team");
-	Console()->Register("set_team_all", "i", CFGFLAG_SERVER, ConSetTeamAll, this, "Set team of all players to team");
+	Console()->Register("set_team_all", "i", CFGFLAG_SERVER, ConSetTeamAll, this, "Set team of all m_apPlayers to team");
 
 	Console()->Register("add_vote", "sr", CFGFLAG_SERVER, ConAddVote, this, "Add a voting option");
 	Console()->Register("remove_vote", "s", CFGFLAG_SERVER, ConRemoveVote, this, "remove a voting option");
 	Console()->Register("force_vote", "ss?r", CFGFLAG_SERVER, ConForceVote, this, "Force a voting option");
 	Console()->Register("clear_votes", "", CFGFLAG_SERVER, ConClearVotes, this, "Clears the voting options");
 	Console()->Register("vote", "r", CFGFLAG_SERVER, ConVote, this, "Force a vote to yes/no");
+
+	Console()->Register("teleport", "ii", CFGFLAG_SERVER, con_teleport, this, "");
+	Console()->Register("teleport_to", "iii", CFGFLAG_SERVER, con_teleport_to, this, "");
+	Console()->Register("get_pos", "i", CFGFLAG_SERVER, con_get_pos, this, "");
+	Console()->Register("kill_pl", "i", CFGFLAG_SERVER, con_kill_pl, this, "");
 
 	Console()->Chain("sv_motd", ConchainSpecialMotdupdate, this);
 }
@@ -1355,7 +1659,7 @@ void CGameContext::OnInit(/*class IKernel *pKernel*/)
 
 	// reset everything here
 	//world = new GAMEWORLD;
-	//players = new CPlayer[MAX_CLIENTS];
+	//m_apPlayers = new CPlayer[MAX_CLIENTS];
 
 	// select gametype
 	if(str_comp(g_Config.m_SvGametype, "mod") == 0)
@@ -1364,12 +1668,16 @@ void CGameContext::OnInit(/*class IKernel *pKernel*/)
 		m_pController = new CGameControllerCTF(this);
 	else if(str_comp(g_Config.m_SvGametype, "tdm") == 0)
 		m_pController = new CGameControllerTDM(this);
+	else if(str_comp(g_Config.m_SvGametype, "race") == 0)
+		m_pController = new CGameControllerRace(this);
+	else if(str_comp(g_Config.m_SvGametype, "hprace") == 0)
+		m_pController = new CGameControllerHPRace(this);
 	else
 		m_pController = new CGameControllerDM(this);
 
-	// setup core world
+	// setup m_Core world
 	//for(int i = 0; i < MAX_CLIENTS; i++)
-	//	game.players[i].core.world = &game.world.core;
+	//	m_apPlayers[i].m_Core.world = &world.m_Core;
 
 	// create all entities from the game layer
 	CMapItemLayerTilemap *pTileMap = m_Layers.GameLayer();
@@ -1398,7 +1706,7 @@ void CGameContext::OnInit(/*class IKernel *pKernel*/)
 		}
 	}
 
-	//game.world.insert_entity(game.Controller);
+	//world.insert_entity(Controller);
 
 #ifdef CONF_DEBUG
 	if(g_Config.m_DbgDummies)

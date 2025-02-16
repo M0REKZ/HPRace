@@ -6,6 +6,7 @@
 // this include should perhaps be removed
 #include "entities/character.h"
 #include "gamecontext.h"
+#include "hprace_score.h"
 
 // player object
 class CPlayer
@@ -96,6 +97,15 @@ public:
 		int m_Max;
 	} m_Latency;
 
+	// hprace
+	int hprace_team;
+	int asked;
+
+	CPlayer *GetPartner();
+	CCharacter *GetPartnerChar();
+	void SetPartner(int CID);
+	void DeletePartner();
+
 private:
 	CCharacter *m_pCharacter;
 	CGameContext *m_pGameServer;
@@ -107,6 +117,9 @@ private:
 	bool m_Spawning;
 	int m_ClientID;
 	int m_Team;
+
+	// hprace
+	int partner;
 };
 
 #endif

@@ -69,6 +69,7 @@ public:
 	virtual ~IGameController();
 
 	virtual void DoWincheck();
+	void DoRaceTimeCheck();
 
 	void DoWarmup(int Seconds);
 
@@ -141,6 +142,9 @@ public:
 	int ClampTeam(int Team);
 
 	virtual void PostReset();
+
+	virtual bool IsRace() const;
+	virtual bool IsHPRace() const;
 };
 
 #endif

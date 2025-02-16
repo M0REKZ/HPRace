@@ -189,6 +189,7 @@ public:
 	int BanAdd(NETADDR Addr, int Seconds, const char *pReason);
 	int BanRemove(NETADDR Addr);
 
+	void GetIP(int ClientID, char *pBuffer, int BufferSize);
 	void PumpNetwork();
 
 	char *GetMapName();

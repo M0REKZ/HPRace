@@ -304,8 +304,16 @@ void CCharacterCore::Tick(bool UseInput)
 
 	if(m_pWorld && m_pWorld->m_Tuning.m_PlayerCollision)
 	{
+		// hack! hack!
+		int Partner = -1;
+		if(m_pWorld->m_Tuning.m_PlayerCollision >= 2)
+			Partner = m_pWorld->m_Tuning.m_PlayerCollision-2;
+
 		for(int i = 0; i < MAX_CLIENTS; i++)
 		{
+			if(Partner != -1 && Partner != i)
+				continue;
+
 			CCharacterCore *pCharCore = m_pWorld->m_apCharacters[i];
 			if(!pCharCore)
 				continue;
@@ -369,6 +377,11 @@ void CCharacterCore::Move()
 
 	if(m_pWorld && m_pWorld->m_Tuning.m_PlayerCollision)
 	{
+		// hack! hack!
+		int Partner = -1;
+		if(m_pWorld->m_Tuning.m_PlayerCollision >= 2)
+			Partner = m_pWorld->m_Tuning.m_PlayerCollision-2;
+
 		// check player collision
 		float Distance = distance(m_Pos, NewPos);
 		int End = Distance+1;
@@ -379,6 +392,9 @@ void CCharacterCore::Move()
 			vec2 Pos = mix(m_Pos, NewPos, a);
 			for(int p = 0; p < MAX_CLIENTS; p++)
 			{
+				if(Partner != -1 && Partner != p)
+					continue;
+
 				CCharacterCore *pCharCore = m_pWorld->m_apCharacters[p];
 				if(!pCharCore || pCharCore == this)
 					continue;

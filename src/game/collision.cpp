@@ -27,6 +27,30 @@ void CCollision::Init(class CLayers *pLayers)
 	m_Height = m_pLayers->GameLayer()->m_Height;
 	m_pTiles = static_cast<CTile *>(m_pLayers->Map()->GetData(m_pLayers->GameLayer()->m_Data));
 
+	// race
+	mem_zero(aLen, sizeof(aLen));
+	mem_zero(aTele, sizeof(aTele));
+	for(int i = m_Width*m_Height-1; i >= 0; i--)
+	{
+		if(m_pTiles[i].m_Index > 34 && m_pTiles[i].m_Index < 85)
+		{
+			if(m_pTiles[i].m_Index&1)
+				aLen[m_pTiles[i].m_Index >> 1]++;
+			else if(!(m_pTiles[i].m_Index&1))
+				aTele[(m_pTiles[i].m_Index-1) >> 1]++;
+		}
+	}
+	for(int i = 0; i < 42; i++)
+	{
+		apDest[i] = new int[aLen[i]];
+		aLen[i] = 0;
+	}
+	for(int i = m_Width*m_Height-1; i >= 0; i--)
+	{
+		if(m_pTiles[i].m_Index&1 && m_pTiles[i].m_Index > 34 && m_pTiles[i].m_Index < 85)
+			apDest[m_pTiles[i].m_Index>>1][aLen[m_pTiles[i].m_Index>>1]++] = i;
+	}
+
 	for(int i = 0; i < m_Width*m_Height; i++)
 	{
 		int Index = m_pTiles[i].m_Index;
@@ -46,7 +70,7 @@ void CCollision::Init(class CLayers *pLayers)
 			m_pTiles[i].m_Index = COLFLAG_SOLID|COLFLAG_NOHOOK;
 			break;
 		default:
-			m_pTiles[i].m_Index = 0;
+			m_pTiles[i].m_Index = Index;
 		}
 	}
 }
@@ -56,7 +80,13 @@ int CCollision::GetTile(int x, int y)
 	int Nx = clamp(x/32, 0, m_Width-1);
 	int Ny = clamp(y/32, 0, m_Height-1);
 
-	return m_pTiles[Ny*m_Width+Nx].m_Index > 128 ? 0 : m_pTiles[Ny*m_Width+Nx].m_Index;
+	if(m_pTiles[Ny*m_Width+Nx].m_Index > 128)
+		return 0;
+
+	if(m_pTiles[Ny*m_Width+Nx].m_Index == COLFLAG_SOLID || m_pTiles[Ny*m_Width+Nx].m_Index == (COLFLAG_SOLID|COLFLAG_NOHOOK) || m_pTiles[Ny*m_Width+Nx].m_Index == COLFLAG_DEATH)
+		return m_pTiles[Ny*m_Width+Nx].m_Index;
+	else
+		return 0;
 }
 
 bool CCollision::IsTileSolid(int x, int y)
@@ -201,4 +231,54 @@ void CCollision::MoveBox(vec2 *pInoutPos, vec2 *pInoutVel, vec2 Size, float Elas
 
 	*pInoutPos = Pos;
 	*pInoutVel = Vel;
+}
+
+// race
+int CCollision::IsTeleport(int x, int y) const
+{
+	int nx = x/32;
+	int ny = y/32;
+	if(y < 0 || nx < 0 || nx >= m_Width || ny >= m_Height)
+		return 0;
+	
+	int z = m_pTiles[ny*m_Width+nx].m_Index-1;
+	if(z > 34 && z < 85 && z&1)
+		return z>>1;
+	return 0;
+}
+ 
+int CCollision::IsCheckpoint(int x, int y) const
+{
+	int nx = x/32;
+	int ny = y/32;
+	if(y < 0 || nx < 0 || nx >= m_Width || ny >= m_Height)
+		return 0;
+	
+	int z = m_pTiles[ny*m_Width+nx].m_Index;
+	if(z > 34 && z < 85 && z&1 && aTele[z>>1] <= 0)
+		return z>>1;
+	return 0;
+}
+
+int CCollision::GetIndex(int x, int y) const
+{
+	int nx = x/32;
+	int ny = y/32;
+	if(y<0 || nx < 0 || nx >= m_Width || ny >= m_Height)
+		return 0;
+	
+	return m_pTiles[ny*m_Width+nx].m_Index;
+}
+
+vec2 CCollision::Teleport(int z) const
+{
+	if(aLen[z] > 0)
+	{
+		int r = rand()%aLen[z];
+		int x = (apDest[z][r]%m_Width)<<5;
+		int y = (apDest[z][r]/m_Width)<<5;
+		return vec2((float)x+16.0, (float)y+16.0);
+	}
+	else
+		return vec2(0,0);
 }

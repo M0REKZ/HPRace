@@ -2,6 +2,7 @@
 /* If you are missing that file, acquire a complete release at teeworlds.com.                */
 #include <new>
 #include <engine/shared/config.h>
+#include "gamemodes/hprace.h"
 #include "player.h"
 
 
@@ -16,6 +17,9 @@ CPlayer::CPlayer(CGameContext *pGameServer, int ClientID, int Team)
 	m_DieTick = Server()->Tick();
 	m_ScoreStartTick = Server()->Tick();
 	m_pCharacter = 0;
+	partner = -1;
+	asked = -1;
+	hprace_team = -1;
 	m_ClientID = ClientID;
 	m_Team = GameServer()->m_pController->ClampTeam(Team);
 	m_SpectatorID = SPEC_FREEVIEW;
@@ -107,6 +111,10 @@ void CPlayer::Snap(int SnappingClient)
 	if(!Server()->ClientIngame(m_ClientID))
 		return;
 
+	int color = -1;
+	if(hprace_team > -1)
+		color = ((CGameControllerHPRace*)GameServer()->m_pController)->GetHPTeam(hprace_team)->get_color();
+
 	CNetObj_ClientInfo *pClientInfo = static_cast<CNetObj_ClientInfo *>(Server()->SnapNewItem(NETOBJTYPE_CLIENTINFO, m_ClientID, sizeof(CNetObj_ClientInfo)));
 	if(!pClientInfo)
 		return;
@@ -115,9 +123,9 @@ void CPlayer::Snap(int SnappingClient)
 	StrToInts(&pClientInfo->m_Clan0, 3, Server()->ClientClan(m_ClientID));
 	pClientInfo->m_Country = Server()->ClientCountry(m_ClientID);
 	StrToInts(&pClientInfo->m_Skin0, 6, m_TeeInfos.m_SkinName);
-	pClientInfo->m_UseCustomColor = m_TeeInfos.m_UseCustomColor;
-	pClientInfo->m_ColorBody = m_TeeInfos.m_ColorBody;
-	pClientInfo->m_ColorFeet = m_TeeInfos.m_ColorFeet;
+	pClientInfo->m_UseCustomColor = hprace_team > -1 ? 1 : m_TeeInfos.m_UseCustomColor;
+	pClientInfo->m_ColorBody = hprace_team > -1 ? color : m_TeeInfos.m_ColorBody;
+	pClientInfo->m_ColorFeet = hprace_team > -1 ? color : m_TeeInfos.m_ColorFeet;
 
 	CNetObj_PlayerInfo *pPlayerInfo = static_cast<CNetObj_PlayerInfo *>(Server()->SnapNewItem(NETOBJTYPE_PLAYERINFO, m_ClientID, sizeof(CNetObj_PlayerInfo)));
 	if(!pPlayerInfo)
@@ -159,6 +167,9 @@ void CPlayer::OnDisconnect(const char *pReason)
 
 		str_format(aBuf, sizeof(aBuf), "leave player='%d:%s'", m_ClientID, Server()->ClientName(m_ClientID));
 		GameServer()->Console()->Print(IConsole::OUTPUT_LEVEL_STANDARD, "game", aBuf);
+
+		if(GameServer()->m_pController->IsHPRace())
+			DeletePartner();
 	}
 }
 
@@ -267,11 +278,57 @@ void CPlayer::TryRespawn()
 {
 	vec2 SpawnPos;
 
-	if(!GameServer()->m_pController->CanSpawn(m_Team, &SpawnPos))
-		return;
+	if(GameServer()->m_pController->IsHPRace())
+	{
+		if(m_Team == -1)
+			return;
+		if(!GameServer()->m_pController->CanSpawn(hprace_team > -1 ? 1 : 0, &SpawnPos))
+			return;
+	}
+	else
+	{
+		if(!GameServer()->m_pController->CanSpawn(m_Team, &SpawnPos))
+			return;
+	}
 
 	m_Spawning = false;
 	m_pCharacter = new(m_ClientID) CCharacter(&GameServer()->m_World);
 	m_pCharacter->Spawn(this, SpawnPos);
 	GameServer()->CreatePlayerSpawn(SpawnPos);
+}
+
+CPlayer *CPlayer::GetPartner()
+{
+	if(partner>-1 && GameServer()->m_apPlayers[partner])
+		return GameServer()->m_apPlayers[partner];
+	return 0;
+}
+
+CCharacter *CPlayer::GetPartnerChar()
+{
+	if(GetPartner() && GameServer()->GetPlayerChar(partner))
+		return GameServer()->GetPlayerChar(partner);
+	return 0;
+}
+
+void CPlayer::SetPartner(int CID)
+{
+	if(GameServer()->m_apPlayers[CID])
+		partner = CID;
+}
+
+void CPlayer::DeletePartner()
+{
+	((CGameControllerHPRace*)GameServer()->m_pController)->DeleteHPTeam(hprace_team);
+	if(partner > -1 && GameServer()->m_apPlayers[partner])
+	{	
+		GameServer()->m_apPlayers[partner]->partner = -1;
+		GameServer()->m_apPlayers[partner]->asked = -1;
+		GameServer()->m_apPlayers[partner]->hprace_team = -1;
+		GameServer()->m_apPlayers[partner]->KillCharacter(-1);
+	}
+
+	partner = -1;
+	hprace_team = -1;
+	asked = -1;
 }

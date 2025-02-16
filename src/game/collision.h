@@ -12,6 +12,11 @@ class CCollision
 	int m_Height;
 	class CLayers *m_pLayers;
 
+	//race
+	int *apDest[42];
+	int aLen[42];
+	int aTele[42];
+
 	bool IsTileSolid(int x, int y);
 	int GetTile(int x, int y);
 
@@ -34,6 +39,12 @@ public:
 	void MovePoint(vec2 *pInoutPos, vec2 *pInoutVel, float Elasticity, int *pBounces);
 	void MoveBox(vec2 *pInoutPos, vec2 *pInoutVel, vec2 Size, float Elasticity);
 	bool TestBox(vec2 Pos, vec2 Size);
+
+	// race
+	int IsTeleport(int x, int y) const;
+	int IsCheckpoint(int x, int y) const;
+	int GetIndex(int x, int y) const;
+	vec2 Teleport(int z) const;
 };
 
 #endif

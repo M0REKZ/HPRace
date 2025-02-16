@@ -16,6 +16,13 @@ enum
 	WEAPON_WORLD = -1, // death tiles etc
 };
 
+enum
+{
+	RACE_NONE = 0,
+	RACE_STARTED,
+	RACE_FINISHED
+};
+
 class CCharacter : public CEntity
 {
 	MACRO_ALLOC_POOL_ID()
@@ -31,6 +38,8 @@ public:
 	virtual void Tick();
 	virtual void TickDefered();
 	virtual void Snap(int SnappingClient);
+
+	void HPRaceTick();
 
 	bool IsGrounded();
 
@@ -62,6 +71,16 @@ public:
 
 	bool IsAlive() const { return m_Alive; }
 	class CPlayer *GetPlayer() { return m_pPlayer; }
+
+	// race var
+	int starttime;
+	int refreshtime;
+	int race_state;
+	float time;
+	bool udeadbro;
+ 
+	// the player core for the physics
+	CCharacterCore m_Core;
 
 private:
 	// player controlling this character
@@ -121,8 +140,10 @@ private:
 		int m_OldVelAmount;
 	} m_Ninja;
 
-	// the player core for the physics
-	CCharacterCore m_Core;
+	// checkpoints
+	int cp_tick;
+	int cp_active;
+	float cp_current[42];
 
 	// info for dead reckoning
 	int m_ReckoningTick; // tick that we are performing dead reckoning From
